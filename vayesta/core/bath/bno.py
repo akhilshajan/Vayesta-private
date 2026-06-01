@@ -6,6 +6,10 @@ from vayesta.core.types import Cluster
 from vayesta.core.bath import helper
 from vayesta.core.bath.bath import Bath
 
+# AS: local-aux embedding helper
+import pyscf
+from pyscf import gto, scf, df as pyscf_df
+
 
 class BNO_Threshold:
     def __init__(self, type, threshold):
@@ -85,6 +89,13 @@ class BNO_Bath(Bath):
 
     @property
     def c_env(self):
+
+        # AS:
+        c = getattr(self, "_c_env_active", None)
+        if c is not None:
+            return c
+
+        # Orginal (kept)
         if self.occtype == "occupied":
             return self.dmet_bath.c_env_occ
         if self.occtype == "virtual":
@@ -191,22 +202,100 @@ class BNO_Bath(Bath):
         dmet_bath = self.dmet_bath
         nao = self.mol.nao
         empty = np.zeros((nao, 0)) if self.spin_restricted else np.zeros((2, nao, 0))
+
+        # ============================
+        # AS: rcut-based env screening (R2 bath)
+        # ============================
+        # Goal: if rcut is set, split the *environment* into
+        # "near" and "far" subspaces via R2_Bath_RHF, then:
+        #   - append "near" to the active sector (occ or vir, depending on occtype)
+        #   - add "far" explicitly to the frozen sector (occ or vir, depending on occtype)
+        #
+        # This preserves a clean active/frozen partition and avoids meaningless
+        # distance screening on canonical env orbitals by rotating into an <r^2> eigenbasis.
+        try:
+            bath_opts = self.base.opts.bath_options
+        except Exception:
+            bath_opts = {}
+
+        rcut = bath_opts.get("rcut", None)
+        rcut_unit = bath_opts.get("unit", "Ang")
+        env_complement_thresh = getattr(self.opts, "env_complement_thresh", 1e-8) if hasattr(self, "opts") else 1e-8
+
+        # AS: local helper to obtain (env_near, env_far) for a requested occtype
+        def _split_env_by_r2(occtype):
+            # Default (no screening): keep original behavior
+            if rcut is None:
+                if occtype == "occupied":
+                    return dmet_bath.c_env_occ, empty
+                if occtype == "virtual":
+                    return dmet_bath.c_env_vir, empty
+                raise ValueError(f"Invalid occtype for R2 split: {occtype}")
+
+            # AS: use Vayesta R2 bath machinery
+            from vayesta.core.bath.r2bath import R2_Bath_RHF
+
+            # NOTE: R2_Bath_RHF currently requires len(fragment.atoms) == 1 and RHF;
+            # this matches r2bath.py as provided.
+            r2bath = R2_Bath_RHF(self.fragment, dmet_bath, occtype)
+            c_near, c_far = r2bath.get_bath(rcut, unit=rcut_unit)
+            return c_near, c_far
+
         if self.occtype == "occupied":
             if c_active is None:
-                c_active_occ = spinalg.hstack_matrices(dmet_bath.c_cluster_occ, self.c_env)
+            # ============================
+            # ORIGINAL: c_active_occ = spinalg.hstack_matrices(dmet_bath.c_cluster_occ, self.c_env) 
+            # ============================
+            # AS: replace self.c_env with rcut-screened env-occ "near"; freeze the "far" env-occ
+                c_env_occ_near, c_env_occ_far = _split_env_by_r2("occupied")  # AS
+                c_active_occ = spinalg.hstack_matrices(dmet_bath.c_cluster_occ, c_env_occ_near)  # AS
+                if rcut is not None:
+                    self._c_env_active = c_env_occ_near
             else:
                 c_active_occ = c_active
-            c_frozen_occ = empty
+
+            # ============================
+            # ORIGINAL: c_frozen_occ = empty
+            # AS: freeze remaining env-occ if rcut is used; otherwise identical (env_far is empty)
+            # ============================
+            if c_active is None:
+                c_frozen_occ = c_env_occ_far  # AS
+            else:
+                # If user explicitly supplied c_active, keep original default frozen occ
+                c_frozen_occ = empty  # AS (conservative)
+            
+            # ORIGINAL: buffer not implemented in occupied mode
             if self.c_buffer is not None:
                 raise NotImplementedError
+
+            # ORIGINAL (kept)
             c_active_vir = dmet_bath.c_cluster_vir
             c_frozen_vir = dmet_bath.c_env_vir
+
         elif self.occtype == "virtual":
             if c_active is None:
-                c_active_vir = spinalg.hstack_matrices(dmet_bath.c_cluster_vir, self.c_env)
+            # ============================
+            # ORIGINAL: c_active_vir = spinalg.hstack_matrices(dmet_bath.c_cluster_vir, self.c_env) 
+            # ============================
+            # AS: replace self.c_env with rcut-screened env-vir "near"; freeze the "far" env-vir
+                c_env_vir_near, c_env_vir_far = _split_env_by_r2("virtual")  # AS
+                c_active_vir = spinalg.hstack_matrices(dmet_bath.c_cluster_vir, c_env_vir_near)  # AS
+                if rcut is not None:
+                    self._c_env_active = c_env_vir_near
             else:
                 c_active_vir = c_active
-            c_frozen_vir = empty
+
+            # ============================
+            # ORIGINAL: c_frozen_vir = empty
+            # AS: freeze remaining env-vir if rcut is used; otherwise identical (env_far is empty)
+            # ============================
+            if c_active is None:
+                c_frozen_vir = c_env_vir_far  # AS
+            else:
+                # If user explicitly supplied c_active, keep original default frozen vir
+                c_frozen_vir = empty  # AS (conservative)
+
+            # ORIGINAL occupied-handling logic (kept)
             if self.c_buffer is None:
                 c_active_occ = dmet_bath.c_cluster_occ
                 c_frozen_occ = dmet_bath.c_env_occ
@@ -216,7 +305,10 @@ class BNO_Bath(Bath):
                 r = dot(self.c_buffer.T, ovlp, dmet_bath.c_env_occ)
                 dm_frozen = np.eye(dmet_bath.c_env_occ.shape[-1]) - np.dot(r.T, r)
                 e, r = np.linalg.eigh(dm_frozen)
-                c_frozen_occ = np.dot(dmet_bath.c_env_occ, r[:, e > 0.5])
+
+                # ORIGINAL: c_frozen_occ = np.dot(dmet_bath.c_env_occ, r[:, e > 0.5])
+                # AS: use a smaller, configurable threshold for the orthogonal complement
+                c_frozen_occ = np.dot(dmet_bath.c_env_occ, r[:, e > env_complement_thresh])
 
         actspace = Cluster.from_coeffs(c_active_occ, c_active_vir, c_frozen_occ, c_frozen_vir)
         return actspace
@@ -361,9 +453,260 @@ class MP2_BNO_Bath(BNO_Bath):
         return eris
 
     def _get_cderi(self, actspace):
+
+        BOHR = 0.529177210903
+
+        def atoms_within_rcut(mol, center_atom, rcut, unit="Ang", include_center=True):
+            """
+            Return atom indices within distance rcut of center_atom.
+            """
+            center_atom = int(center_atom)
+            coords_bohr = mol.atom_coords()             # (natm, 3) in Bohr
+            center_bohr = mol.atom_coord(center_atom)   # (3,) in Bohr
+            d_bohr = np.linalg.norm(coords_bohr - center_bohr[None, :], axis=1)
+
+            unit_l = unit.lower()
+            if unit_l.startswith("ang"):
+                d = d_bohr * BOHR
+            elif unit_l.startswith("b"):
+                d = d_bohr
+            else:
+                raise ValueError(f"Invalid unit: {unit}")
+
+            atoms = np.where(d <= float(rcut))[0].tolist()
+            if not include_center and center_atom in atoms:
+                atoms.remove(center_atom)
+            return atoms
+
+        def expand_atoms_by_distance(mol, atoms_seed, radius, unit="Ang"):
+            """Return atoms within `radius` of any atom in atoms_seed."""
+            # radius in Ang or Bohr
+            coords = mol.atom_coords()  # Bohr
+            if unit.lower().startswith("ang"):
+                rad_bohr = radius / 0.529177210903
+            else:
+                rad_bohr = radius
+            seed = np.asarray(atoms_seed, dtype=int)
+            seed_coords = coords[seed]
+            # compute min distance to seed set for every atom
+            dmin = np.full(mol.natm, np.inf)
+            for R in seed_coords:
+                d = np.linalg.norm(coords - R[None, :], axis=1)
+                dmin = np.minimum(dmin, d)
+            keep = np.where(dmin <= rad_bohr)[0].tolist()
+            return keep
+
+        def ao_indices_for_atoms(mol, atoms):
+            """Return AO row indices in the full mol corresponding to a list of atom indices."""
+            atoms = list(map(int, atoms))
+            aosl = mol.aoslice_by_atom()
+            idx = []
+            for a in atoms:
+                p0, p1 = aosl[a][2], aosl[a][3]
+                idx.extend(range(p0, p1))
+            return np.asarray(idx, dtype=int)
+
+        from scipy.linalg import cho_factor, cho_solve  # faster + stable for SPD overlap
+        def build_local_aux_ctx(mf_full, atoms_prim, auxbasis=None, verbose=0):
+            """
+            Build and cache local MF (with DF) for a truncated molecule defined by atoms_prim.
+
+            Returns a dict ctx with:
+            - mf_loc
+            - ao_idx_full
+            - S_lf  (rows of S_full corresponding to local AOs)
+            - chol  (Cholesky factorization of S_loc)
+            - tag   (hashable identifier)
+            """
+            mol_full = mf_full.mol
+            atoms_prim = list(map(int, atoms_prim))
+
+            # --- Build local primary mol from subset of atoms (keep order)
+            atom_spec = [mol_full.atom[i] for i in atoms_prim]
+
+            mol_loc = gto.Mole()
+            mol_loc.atom = atom_spec
+            mol_loc.unit = mol_full.unit
+            mol_loc.basis = mol_full.basis
+            mol_loc.charge = mol_full.charge  # keep consistent by default
+            mol_loc.spin = mol_full.spin
+            # --- FIX electron parity mismatch ---
+            ne = mol_loc.nelectron
+            if (ne - mol_loc.spin) % 2 != 0:
+                # Minimal correction: flip spin by 1
+                mol_loc.spin = mol_loc.spin + 1
+            mol_loc.build(verbose=verbose)
+
+            # --- Dummy RHF + DF build (no SCF needed)
+            mf_loc = scf.RHF(mol_loc)
+            mf_loc.verbose = verbose
+
+            if auxbasis is None:
+                auxbasis = getattr(getattr(mf_full, "with_df", None), "auxbasis", None)
+            if auxbasis is None:
+                raise RuntimeError("auxbasis not found. Pass auxbasis or ensure mf_full.with_df.auxbasis exists.")
+
+            mf_loc.with_df = pyscf_df.DF(mol_loc)
+            mf_loc.with_df.auxbasis = auxbasis
+            mf_loc.with_df.build()
+
+            # --- AO index map full -> local
+            ao_idx_full = ao_indices_for_atoms(mol_full, atoms_prim)
+
+            # --- Overlaps needed for projection
+            S_full = mf_full.get_ovlp()
+            S_loc = mf_loc.get_ovlp()  # (nao_loc, nao_loc)
+
+            # Cross overlap rows (since mol_loc built from subset in same atom order):
+            S_lf = S_full[np.ix_(ao_idx_full, np.arange(S_full.shape[0]))]  # (nao_loc, nao_full)
+
+            # Factorize S_loc once; reuse for occupied+virtual projections
+            chol = cho_factor(S_loc, lower=True, check_finite=False)
+
+            tag = (tuple(atoms_prim), str(auxbasis), int(mol_loc.nao_nr()))
+            return dict(mf_loc=mf_loc, ao_idx_full=ao_idx_full, S_lf=S_lf, chol=chol, tag=tag)
+
+
+        def project_mos_to_local(ctx, C_occ_full, C_vir_full):
+            """
+            Solve S_loc * C_proj = (S_lf @ C_full) for both occ and vir.
+            Uses cached Cholesky of S_loc.
+            """
+            B_occ = ctx["S_lf"] @ C_occ_full
+            B_vir = ctx["S_lf"] @ C_vir_full
+
+            Cocc_loc = cho_solve(ctx["chol"], B_occ, check_finite=False)
+            Cvir_loc = cho_solve(ctx["chol"], B_vir, check_finite=False)
+            return Cocc_loc, Cvir_loc
+
+        def _tail_weight(C_full, ao_keep, S_full=None):
+            """
+            Tail weights outside ao_keep for each MO column.
+            Returns (w_tail_per_orb, w_tail_max).
+            If S_full is provided: uses overlap-metric tail.
+            """
+            ao_keep = np.asarray(ao_keep, dtype=int)
+            nao, nmo = C_full.shape
+            keep_mask = np.zeros(nao, dtype=bool)
+            keep_mask[ao_keep] = True
+
+            C_out = C_full[~keep_mask, :]  # (nao_out, nmo)
+
+            # Simple coefficient norm tail
+            if S_full is None:
+                w = np.sum(C_out * C_out, axis=0)
+                return w, float(np.max(w)) if w.size else 0.0
+
+            # Build S_kk and B^T S C (where B selects kept AOs)
+            S_kk = S_full[np.ix_(ao_keep, ao_keep)]
+            B = S_full[np.ix_(ao_keep, np.arange(nao))] @ C_full  # shape (nkeep, nmo)
+
+            chol = cho_factor(S_kk, lower=True, check_finite=False)
+            X = cho_solve(chol, B, check_finite=False)            # X = S_kk^{-1} (S_k,: C)
+
+            # w_in = (B^T) S_kk^{-1} B  per column
+            w_in = np.einsum("ki,ki->i", B, X)
+
+            # orbital norms in S metric
+            w_norm = np.einsum("pi,pq,qi->i", C_full, S_full, C_full)
+            # if these deviate from 1, tail interpretation gets fuzzy
+            print("S-norm stats:", w_norm.min(), w_norm.mean(), w_norm.max())
+
+            w_tail = 1.0 - w_in
+            # Clip tiny numerical excursions
+            w = np.clip(w_tail, -1e-12, 1.0)
+
+            return w, float(np.max(w)) if w.size else 0.0
+
         # We only need the (L|ov) block for MP2:
-        mo_coeff = (actspace.c_active_occ, actspace.c_active_vir)
-        cderi, cderi_neg = self.base.get_cderi(mo_coeff)
+        mo_coeff_full = (actspace.c_active_occ, actspace.c_active_vir)
+
+        # Options
+        bath_opts = getattr(self.base.opts, "bath_options", {}) if hasattr(self.base, "opts") else {}
+        local_aux_enable = bath_opts.get("local_aux_enable", False)
+        if not (local_aux_enable and self.spin_restricted):
+            return self.base.get_cderi(mo_coeff_full)
+
+        rcut = bath_opts.get("rcut", 5.0)
+        rcut_unit = bath_opts.get("unit", "Ang")
+        local_aux_radius = bath_opts.get("local_aux_radius", 5.0)
+        local_aux_unit = bath_opts.get("local_aux_unit", "Ang")
+        local_aux_print = bath_opts.get("local_aux_print", False)
+
+        # Define local atoms (deterministic)
+        center_atom = int(self.fragment.atoms[0])
+        atoms_support = atoms_within_rcut(self.mol, center_atom, rcut=float(rcut), unit=rcut_unit)
+        atoms_aux = expand_atoms_by_distance(self.mol, atoms_support, float(local_aux_radius), unit=local_aux_unit)
+        atoms_aux = sorted(set(map(int, atoms_aux)))
+
+        # Cache container on embedding object (shared across occ/vir instances)
+        if not hasattr(self.base, "_local_aux_ctx_cache"):
+            self.base._local_aux_ctx_cache = {}
+
+        # Build/reuse ctx
+        auxbasis = getattr(getattr(self.base.mf, "with_df", None), "auxbasis", None)
+        cache_key = (tuple(atoms_aux), str(auxbasis))
+
+        ctx = self.base._local_aux_ctx_cache.get(cache_key, None)
+        if ctx is None:
+            ctx = build_local_aux_ctx(self.base.mf, atoms_aux, auxbasis=auxbasis, verbose=0)
+
+            # Store required items explicitly as requested
+            self.base.mf_local = ctx["mf_loc"]
+            self.base.ao_idx_full = ctx["ao_idx_full"]
+            self.base._local_ctx_tag = ctx["tag"]
+
+            self.base._local_aux_ctx_cache[cache_key] = ctx
+
+            if local_aux_print:
+                self.log.info(
+                    "Local-aux ctx built: support atoms=%d aux atoms=%d  tag=%r",
+                    len(atoms_support), len(atoms_aux), self.base._local_ctx_tag
+                )
+        else:
+            # Ensure these are visible even when reused
+            self.base.mf_local = ctx["mf_loc"]
+            self.base.ao_idx_full = ctx["ao_idx_full"]
+            self.base._local_ctx_tag = ctx["tag"]
+
+            if local_aux_print:
+                self.log.info(
+                    "Local-aux ctx reused: support atoms=%d aux atoms=%d  tag=%r",
+                    len(atoms_support), len(atoms_aux), self.base._local_ctx_tag
+                )
+        
+        # ---------------------------------------------------------------------
+        # AS: diagnostics only — tail weight of FULL-space orbitals outside local AO set
+        # ---------------------------------------------------------------------
+        if local_aux_print:
+            # Full AO overlap (for overlap-metric tail)
+            S_full = self.base.mf.get_ovlp()
+
+            ao_keep = ctx["ao_idx_full"]  # full AO indices kept by local atoms_aux
+
+            # Tail for occupied-active and virtual-active (full-space coeffs)
+            Cocc_full = mo_coeff_full[0]
+            Cvir_full = mo_coeff_full[1]
+
+            w_occ_nom, wocc_nom_max = _tail_weight(Cocc_full, ao_keep, S_full=None)
+            w_vir_nom, wvir_nom_max = _tail_weight(Cvir_full, ao_keep, S_full=None)
+
+            w_occ_S, wocc_S_max = _tail_weight(Cocc_full, ao_keep, S_full=S_full)
+            w_vir_S, wvir_S_max = _tail_weight(Cvir_full, ao_keep, S_full=S_full)
+
+            self.log.info("Tail weight outside local AOs (keep=%d AOs):", len(ao_keep))
+            self.log.info("  occ  no-metric: max=%.3e  mean=%.3e", wocc_nom_max, float(np.mean(w_occ_nom)) if w_occ_nom.size else 0.0)
+            self.log.info("  vir  no-metric: max=%.3e  mean=%.3e", wvir_nom_max, float(np.mean(w_vir_nom)) if w_vir_nom.size else 0.0)
+            self.log.info("  occ  overlap-S: max=%.3e  mean=%.3e", wocc_S_max,   float(np.mean(w_occ_S))   if w_occ_S.size else 0.0)
+            self.log.info("  vir  overlap-S: max=%.3e  mean=%.3e", wvir_S_max,   float(np.mean(w_vir_S))   if w_vir_S.size else 0.0)
+
+
+        # Project current actspace orbitals into local AO basis using cached overlaps
+        Cocc_loc, Cvir_loc = project_mos_to_local(ctx, mo_coeff_full[0], mo_coeff_full[1])
+
+        # Do DF AO->MO on local mf
+        from vayesta.core.eris import get_cderi_df
+        cderi, cderi_neg = get_cderi_df(ctx["mf_loc"], (Cocc_loc, Cvir_loc))
         return cderi, cderi_neg
 
     def get_eris_or_cderi(self, actspace):
@@ -491,6 +834,17 @@ class MP2_BNO_Bath(BNO_Bath):
         actspace = Cluster.from_coeffs(
             c_active_occ, c_active_vir, actspace_orig.c_frozen_occ, actspace_orig.c_frozen_vir
         )
+
+        nocc_a = actspace.c_active_occ.shape[-1]
+        nvir_a = actspace.c_active_vir.shape[-1]
+        nocc_f = actspace.c_frozen_occ.shape[-1]
+        nvir_f = actspace.c_frozen_vir.shape[-1]
+        self.log.info(
+                "ClusterRHF(norb_active=%d, norb_frozen=%d)  [occA=%d virA=%d occF=%d virF=%d]",
+                nocc_a + nvir_a, nocc_f + nvir_f, nocc_a, nvir_a, nocc_f, nvir_f
+        )
+
+        #import pdb; pdb.set_trace()
 
         t0 = timer()
         t2, ecorr = self._make_t2(actspace, fock, eris=eris)
