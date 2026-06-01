@@ -112,6 +112,24 @@ def get_cderi_df_exspace(mf, ex_coeff, compact=False, blksize=None):
         cderi[blk] = einsum("Lab,nab->Ln", lab, ex_coeff)
     return cderi, None
 
+from scipy.linalg import solve
+
+def _project_mo_to_local_ao(emb, mo):
+    """Project full-AO MO coeffs (nao_full,nmo) onto emb.mf_local AO basis (nao_loc,nmo)."""
+    mf_full = emb.mf
+    mf_loc  = emb.mf_local
+    ao_idx_full = emb.ao_idx_full
+
+    # Overlaps
+    S_full = mf_full.get_ovlp()
+    S_loc  = mf_loc.get_ovlp()
+    S_lf   = S_full[np.ix_(ao_idx_full, np.arange(S_full.shape[0]))]  # (nao_loc, nao_full)
+
+    # B = <chi_loc | psi_full> = S_lf @ C_full
+    B = S_lf @ mo
+
+    # Solve S_loc * C_loc = B  (assume symmetric overlap)
+    return solve(S_loc, B, assume_a="sym")
 
 @log_method()
 def get_eris_array(emb, mo_coeff, compact=False):
@@ -144,7 +162,18 @@ def get_eris_array(emb, mo_coeff, compact=False):
         return eris
     # Molecules and Gamma-point PBC:
     if hasattr(emb.mf, "with_df") and emb.mf.with_df is not None:
-        eris = emb.mf.with_df.ao2mo(mo_coeff, compact=compact)
+        # If a local DF context exists, use it (mo_coeff must be in local AO basis)
+        if getattr(emb, "mf_local", None) is not None and getattr(emb, "ao_idx_full", None) is not None:
+            mf_loc = emb.mf_local
+            if isinstance(mo_coeff, np.ndarray) and mo_coeff.ndim == 2:
+                mo_coeff_loc = _project_mo_to_local_ao(emb, mo_coeff)
+            else:
+                mo_coeff_loc = [ _project_mo_to_local_ao(emb, m) for m in mo_coeff ]
+            print("[ERIS] Using LOCAL AO/DF integrals")
+            eris = mf_loc.with_df.ao2mo(mo_coeff_loc, compact=compact)
+        else:
+            print("[ERIS] Using FULL AO/DF integrals")
+            eris = emb.mf.with_df.ao2mo(mo_coeff, compact=compact)
     elif emb.mf._eri is not None:
         eris = pyscf.ao2mo.kernel(emb.mf._eri, mo_coeff, compact=compact)
     else:
@@ -156,7 +185,6 @@ def get_eris_array(emb, mo_coeff, compact=False):
             shape = [mo.shape[-1] for mo in mo_coeff]
         eris = eris.reshape(shape)
     return eris
-
 
 @log_method()
 def get_eris_object(emb, postscf, fock=None):
