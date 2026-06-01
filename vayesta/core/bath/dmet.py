@@ -212,7 +212,8 @@ class DMET_Bath_RHF(Bath):
 
     def log_info(self, eig, c_env, threshold=1e-10):
         tol = self.dmet_threshold
-        mask = np.logical_and(eig >= threshold, eig <= 1 - threshold)
+        #mask = np.logical_and(eig >= threshold, eig <= 1 - threshold)
+        mask = np.logical_and(eig >= tol, eig <= 1 - tol)
         ovlp = self.base.get_ovlp()
         maxocc = 2 if self.base.spinsym == "restricted" else 1
         if np.any(mask):
@@ -221,15 +222,19 @@ class DMET_Bath_RHF(Bath):
             self.log.info(
                 "      ----  ----------  ------------  ------------------------------------------------------"
             )
+            nao = ovlp.shape[0]
             for idx, e in enumerate(eig[mask]):
                 bath = "Yes" if (tol <= e <= 1 - tol) else "No"
                 entang = 4 * e * (1 - e)
-                # Mulliken population of DMET orbital:
-                pop = einsum("a,b,ba->a", c_env[:, mask][:, idx], c_env[:, mask][:, idx], ovlp)
-                sort = np.argsort(-pop)
-                pop = pop[sort]
-                labels = np.asarray(self.mol.ao_labels(None))[sort][: min(len(pop), 4)]
-                char = ", ".join("%s %s%s (%.0f%%)" % (*(l[1:]), 100 * pop[i]) for (i, l) in enumerate(labels))
+                if nao > 1000:
+                    char = "Not computed (nao > 1000). Enable at source if needed."
+                else:
+                    # Mulliken population of DMET orbital:
+                    pop = einsum("a,b,ba->a", c_env[:, mask][:, idx], c_env[:, mask][:, idx], ovlp)
+                    sort = np.argsort(-pop)
+                    pop = pop[sort]
+                    labels = np.asarray(self.mol.ao_labels(None))[sort][: min(len(pop), 4)]
+                    char = ", ".join("%s %s%s (%.0f%%)" % (*(l[1:]), 100 * pop[i]) for (i, l) in enumerate(labels))
                 self.log.info("  %2d  %4s  %10.3g  %12.3g  %s", idx + 1, bath, e * maxocc, entang, char)
         # Calculate entanglement entropy
         mask_bath = np.logical_and(eig >= tol, eig <= 1 - tol)
