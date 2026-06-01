@@ -87,6 +87,12 @@ class Options(OptionsBase):
         # R2 bath
         rcut=None,
         unit="Ang",
+        # local aux
+        local_aux_enable=False,
+        local_aux_radius=5.0,
+        local_aux_unit="Ang",
+        local_aux_atom_weight_thresh=1e-4,
+        local_aux_print=False,
         # EwDMET bath
         order=None,
         max_order=20,  # +threshold (same as MP2 bath)
@@ -293,6 +299,12 @@ class Embedding:
             self.kpts = None
             self.kdf = None
             self.madelung = None
+            # --- Local MF / AO-region
+            self._local_aux_ctx_cache = {}
+            self.mf_local = None          # PySCF mf object on local/truncated mol (DF-enabled)
+            self.ao_idx_full = None       # AO indices in the FULL molecule defining the local AO region
+            self._local_ctx_tag = None    # Optional: helps detect stale reuse (atoms list / fragment id / etc.)
+
             with log_time(self.log.timing, "Time for mean-field setup: %s"):
                 self.init_mf(mf)
 
