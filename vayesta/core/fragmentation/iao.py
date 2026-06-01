@@ -1,5 +1,10 @@
 import os.path
 import numpy as np
+#########AS#########
+import os
+import hashlib
+import h5py
+#########AS#########
 
 import pyscf
 import pyscf.lo
@@ -31,11 +36,22 @@ def get_default_minao(basis):
         raise ValueError("Could not chose minimal basis for basis %s automatically!", basis)
     return minao
 
+#########AS#########
+def _mol_fingerprint(mol):
+    """Fingerprint to ensure cache matches the exact geometry+basis."""
+    coords = mol.atom_coords(unit="Ang")
+    h = hashlib.sha1()
+    h.update(str(mol.natm).encode())
+    h.update(str(mol.basis).encode())
+    h.update(np.asarray(coords, dtype=np.float64).tobytes())
+    return h.hexdigest()
+#########AS#########
+
 
 class IAO_Fragmentation(Fragmentation):
     name = "IAO"
 
-    def __init__(self, *args, minao="auto", **kwargs):
+    def __init__(self, *args, minao="auto", cache_file="iao_cache.h5", **kwargs):
         super().__init__(*args, **kwargs)
         if minao.lower() == "auto":
             minao = get_default_minao(self.mol.basis)
@@ -47,6 +63,10 @@ class IAO_Fragmentation(Fragmentation):
         else:
             self.log.debug("IAO:  computational basis= %s  minimal reference basis= %s", self.mol.basis, minao)
         self.minao = minao
+#########AS#########
+        self.cache_file = cache_file
+        self._mol_fp = _mol_fingerprint(self.mol)
+#########AS#########
         try:
             self.refmol = pyscf.lo.iao.reference_mol(self.mol, minao=self.minao)
         except IndexError as e:
@@ -66,6 +86,66 @@ class IAO_Fragmentation(Fragmentation):
     def n_iao(self):
         return self.refmol.nao
 
+#########AS#########
+    def _try_load_cache(self, add_virtuals):
+        if not self.cache_file:
+            self.log.info("IAO cache disabled (cache_file is None/empty).")
+            return None
+        if not os.path.isfile(self.cache_file):
+            self.log.info("IAO CACHE MISS: %s not found", self.cache_file)
+            return None
+
+        try:
+            with h5py.File(self.cache_file, "r") as f:
+                if f.attrs.get("name", "") != "vayesta-iao-cache":
+                    self.log.info("IAO CACHE MISS: wrong cache signature")
+                    return None
+                if f.attrs.get("mol_fp", "") != self._mol_fp:
+                    self.log.info("IAO CACHE MISS: molecule fingerprint mismatch")
+                    return None
+                if f.attrs.get("basis", "") != str(self.mol.basis):
+                    self.log.info("IAO CACHE MISS: basis mismatch")
+                    return None
+                if f.attrs.get("minao", "") != str(self.minao):
+                    self.log.info("IAO CACHE MISS: minao mismatch")
+                    return None
+                if bool(f.attrs.get("add_virtuals", True)) != bool(add_virtuals):
+                    self.log.info("IAO CACHE MISS: add_virtuals mismatch")
+                    return None
+
+                c = f["C_iao"][...]
+                self.log.info("IAO CACHE HIT: loaded C_iao from %s (shape=%s)", self.cache_file, c.shape)
+                return c
+        except Exception as e:
+            self.log.warning("IAO CACHE MISS: failed reading %s (%s)", self.cache_file, e)
+            return None
+
+    def _write_cache(self, c_iao, add_virtuals):
+        if not self.cache_file:
+            return
+        tmp = self.cache_file + ".tmp"
+        try:
+            with h5py.File(tmp, "w") as f:
+                f.attrs["name"] = "vayesta-iao-cache"
+                f.attrs["mol_fp"] = self._mol_fp
+                f.attrs["basis"] = str(self.mol.basis)
+                f.attrs["minao"] = str(self.minao)
+                f.attrs["add_virtuals"] = bool(add_virtuals)
+                f.create_dataset("C_iao", data=c_iao, compression="gzip", compression_opts=1, shuffle=True)
+
+            os.replace(tmp, self.cache_file)
+            self.log.info("IAO CACHE WRITE: saved C_iao to %s (shape=%s)", self.cache_file, c_iao.shape)
+        except Exception as e:
+            self.log.warning("IAO cache write failed (%s): %s", self.cache_file, e)
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+
+
+#########AS#########
+
     def get_coeff(self, mo_coeff=None, mo_occ=None, add_virtuals=True):
         """Make intrinsic atomic orbitals (IAOs).
 
@@ -74,6 +154,13 @@ class IAO_Fragmentation(Fragmentation):
         c_iao : (n(AO), n(IAO)) array
             Orthonormalized IAO coefficients.
         """
+#########AS#########
+        cached = self._try_load_cache(add_virtuals=add_virtuals)
+        if cached is not None:
+            return cached
+
+        self.log.info("IAO: building IAOs from scratch (cache miss).")
+#########AS#########
         if mo_coeff is None:
             mo_coeff = self.mo_coeff
         if mo_occ is None:
@@ -109,6 +196,9 @@ class IAO_Fragmentation(Fragmentation):
             c_iao = np.hstack((c_iao, c_vir))
         # Test orthogonality of IAO
         self.check_orthonormal(c_iao)
+#########AS#########
+        self._write_cache(c_iao, add_virtuals=add_virtuals)
+#########AS#########
         return c_iao
 
     def check_nelectron(self, c_iao, mo_coeff, mo_occ):
