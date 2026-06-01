@@ -55,7 +55,12 @@ class R2_Bath_RHF(Bath):
             raise ValueError("Invalid occtype: %s" % occtype)
         self.occtype = occtype
         if len(self.fragment.atoms) != 1:
-            raise NotImplementedError
+            #raise NotImplementedError
+            self.log.info(
+                    "R2 bath: fragment has %d atoms; picking first atom (index %d) as center",
+                    len(self.fragment.atoms),
+                    self.fragment.atoms[0],
+            )
         atom = self.fragment.atoms[0]
         self.center = self.mol.atom_coord(atom)  # In Bohr!
         self.coeff, self.eig = self.kernel()
