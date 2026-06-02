@@ -51,6 +51,16 @@ class EwDMET_Bath_Test(TestCase):
 
 
 class MP2_BNO_Test(TestCase):
+    def test_bno_bath_uhf_regression(self):
+        uhf = testsystems.water_cation_sto3g.uhf()
+        uemb = UEmbedding(uhf)
+        with uemb.iao_fragmentation() as f:
+            ufrag = f.add_atomic_fragment("O")
+        udmet_bath = DMET_Bath(ufrag)
+        udmet_bath.kernel()
+        ubno_bath_vir = MP2_Bath(ufrag, udmet_bath, occtype="virtual")
+        self.assertEqual(len(ubno_bath_vir.occup), 2)
+
     def test_bno_Bath(self):
         rhf = testsystems.ethanol_ccpvdz.rhf()
 
