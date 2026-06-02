@@ -835,14 +835,42 @@ class MP2_BNO_Bath(BNO_Bath):
             c_active_occ, c_active_vir, actspace_orig.c_frozen_occ, actspace_orig.c_frozen_vir
         )
 
-        nocc_a = actspace.c_active_occ.shape[-1]
-        nvir_a = actspace.c_active_vir.shape[-1]
-        nocc_f = actspace.c_frozen_occ.shape[-1]
-        nvir_f = actspace.c_frozen_vir.shape[-1]
-        self.log.info(
+        if isinstance(actspace.c_active_occ, tuple):
+            nocc_a = actspace.c_active_occ[0].shape[-1]
+            nocc_b = actspace.c_active_occ[1].shape[-1]
+            nvir_a = actspace.c_active_vir[0].shape[-1]
+            nvir_b = actspace.c_active_vir[1].shape[-1]
+            nocc_fa = actspace.c_frozen_occ[0].shape[-1]
+            nocc_fb = actspace.c_frozen_occ[1].shape[-1]
+            nvir_fa = actspace.c_frozen_vir[0].shape[-1]
+            nvir_fb = actspace.c_frozen_vir[1].shape[-1]
+            self.log.info(
+                "ClusterUHF(norb_active=%d, norb_frozen=%d)  [occA=%d virA=%d occB=%d virB=%d occFA=%d virFA=%d occFB=%d virFB=%d]",
+                nocc_a + nvir_a + nocc_b + nvir_b,
+                nocc_fa + nvir_fa + nocc_fb + nvir_fb,
+                nocc_a,
+                nvir_a,
+                nocc_b,
+                nvir_b,
+                nocc_fa,
+                nvir_fa,
+                nocc_fb,
+                nvir_fb,
+            )
+        else:
+            nocc_a = actspace.c_active_occ.shape[-1]
+            nvir_a = actspace.c_active_vir.shape[-1]
+            nocc_f = actspace.c_frozen_occ.shape[-1]
+            nvir_f = actspace.c_frozen_vir.shape[-1]
+            self.log.info(
                 "ClusterRHF(norb_active=%d, norb_frozen=%d)  [occA=%d virA=%d occF=%d virF=%d]",
-                nocc_a + nvir_a, nocc_f + nvir_f, nocc_a, nvir_a, nocc_f, nvir_f
-        )
+                nocc_a + nvir_a,
+                nocc_f + nvir_f,
+                nocc_a,
+                nvir_a,
+                nocc_f,
+                nvir_f,
+            )
 
         #import pdb; pdb.set_trace()
 
