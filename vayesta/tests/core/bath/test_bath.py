@@ -59,7 +59,10 @@ class MP2_BNO_Test(TestCase):
         udmet_bath = DMET_Bath(ufrag)
         udmet_bath.kernel()
         ubno_bath_vir = MP2_Bath(ufrag, udmet_bath, occtype="virtual")
+        self.assertEqual(len(ubno_bath_vir.coeff), 2)
         self.assertEqual(len(ubno_bath_vir.occup), 2)
+        self.assertEqual(ubno_bath_vir.coeff[0].ndim, 2)
+        self.assertEqual(ubno_bath_vir.coeff[1].ndim, 2)
 
     def test_bno_Bath(self):
         rhf = testsystems.ethanol_ccpvdz.rhf()

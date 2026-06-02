@@ -835,7 +835,7 @@ class MP2_BNO_Bath(BNO_Bath):
             c_active_occ, c_active_vir, actspace_orig.c_frozen_occ, actspace_orig.c_frozen_vir
         )
 
-        if isinstance(actspace.c_active_occ, tuple):
+        if isinstance(actspace.c_active_occ, (tuple, list)):
             nocc_a = actspace.c_active_occ[0].shape[-1]
             nocc_b = actspace.c_active_occ[1].shape[-1]
             nvir_a = actspace.c_active_vir[0].shape[-1]
