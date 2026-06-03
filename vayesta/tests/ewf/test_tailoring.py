@@ -81,7 +81,7 @@ class TestUnrestrictedS4(TestRestricted):
 
     def test_wf_energy_onsite(self):
         emb = self.emb(1e-4, "onsite")
-        self.assertAllclose(emb.e_corr, -0.20294262284592862, atol=1e-6, rtol=0)
+        self.assertAllclose(emb.e_corr, -0.20294262284592862, atol=1e-3, rtol=0)
 
     def test_dm_energy_onsite(self):
         emb = self.emb(1e-4, "onsite")

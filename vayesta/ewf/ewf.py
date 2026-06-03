@@ -92,6 +92,8 @@ class EWF(Embedding):
 
     # Default fragmentation
     def fragmentation(self, *args, **kwargs):
+        if self.is_uhf:
+            return self.sao_fragmentation(*args, **kwargs)
         return self.iao_fragmentation(*args, **kwargs)
 
     def tailor_all_fragments(self):
