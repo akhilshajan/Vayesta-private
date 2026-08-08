@@ -299,6 +299,12 @@ class BNO_Bath(Bath):
             log_space("Rest", occup[bno_number:])
 
         c_bath, c_rest = np.hsplit(coeff, [bno_number])
+        # AS: restore the rcut-frozen far env into the cluster frozen space.
+        # Without this the far orbitals are dropped from the Cluster entirely
+        # and make_frozen_rdm1() is missing their density.
+        c_far = getattr(self, "_c_env_frozen", None)
+        if c_far is not None and c_far.shape[-1] > 0:
+            c_rest = np.hstack((c_rest, c_far))
         return c_bath, c_rest
 
     def get_active_space(self, c_active=None):
