@@ -128,7 +128,20 @@ class BNO_Bath(Bath):
                 "ligand_atoms is not supported for UHF (RHF only). "
                 "Remove ligand_atoms from bath_options or use an RHF reference."
             )
-        atoms = sorted({int(a) for a in lig})
+        def _parse(entry):
+            if isinstance(entry, str):
+                parts = entry.replace(" ", "").split("-")
+                if len(parts) == 2:
+                    return list(range(int(parts[0]), int(parts[1]) + 1))   # inclusive
+                return [int(parts[0])]
+            try:
+                return list(entry)          # range, list, tuple, ndarray
+            except TypeError:
+                return [int(entry)]         # bare int
+
+        if isinstance(lig, (str, range, int)):
+            lig = [lig]
+        atoms = sorted({int(a) for e in lig for a in _parse(e)})
         for a in atoms:
             if not (0 <= a < self.mol.natm):
                 raise ValueError(
@@ -144,37 +157,46 @@ class BNO_Bath(Bath):
         aoslice = self.mol.aoslice_by_atom()
         return np.hstack([np.arange(aoslice[a][2], aoslice[a][3]) for a in atoms])
 
-    def _get_s_half(self):
-        """S^(1/2) (Loewdin metric), cached on the embedding object."""
-        base = self.fragment.base
-        sh = getattr(base, "_s_half_cached", None)
-        if sh is None:
-            e, v = np.linalg.eigh(base.get_ovlp())
-            sh = np.dot(v * np.sqrt(e), v.T)
-            base._s_half_cached = sh
-        return sh
-
-    def _ligand_population(self, c):
-        """Loewdin ligand population carried by an orthonormal set c."""
+    def _ligand_bmat(self, c):
+        """b with <psi|P_L|psi> = b b^T, shape (norb, n_lig_ao).
+        P_L = |X_L>(S_LL)^-1<X_L|. Never forms a norb x norb matrix."""
+        from scipy.linalg import cholesky, solve_triangular
         aos = self._get_ligand_aos()
         if len(aos) == 0 or c.shape[-1] == 0:
+            return np.zeros((c.shape[-1], 0))
+        ovlp = self.fragment.base.get_ovlp()
+        a = np.dot(c.T, ovlp[:, aos])                    # (norb, n_lig_ao)
+        s_ll = ovlp[np.ix_(aos, aos)]
+        try:
+            lmat = cholesky(s_ll, lower=True)
+            return solve_triangular(lmat, a.T, lower=True).T
+        except np.linalg.LinAlgError:
+            w, v = np.linalg.eigh(s_ll)
+            keep = w > 1e-10
+            return np.dot(a, v[:, keep] / np.sqrt(w[keep]))
+
+    def _ligand_population(self, c):
+        """Ligand population carried by an orthonormal set c."""
+        if c.shape[-1] == 0 or len(self._get_ligand_aos()) == 0:
             return 0.0
-        csh = np.dot(self._get_s_half(), c)
-        return float(np.sum(csh[aos] ** 2))
+        return float(np.sum(self._ligand_bmat(c) ** 2))
 
     def _split_ligand(self, c_space, tol):
-        """Split orthonormal c_space into (ligand-character, remainder)."""
-        aos = self._get_ligand_aos()
-        nao = c_space.shape[0]
-        if len(aos) == 0 or c_space.shape[-1] == 0:
+        """Split orthonormal c_space into (ligand-character, remainder).
+        Selection is O(norb * n_lig_ao^2), not O(norb^3)."""
+        from scipy.linalg import qr
+        nao, norb = c_space.shape
+        if len(self._get_ligand_aos()) == 0 or norb == 0:
             return np.zeros((nao, 0)), c_space, np.zeros(0), np.zeros(0, dtype=bool)
-        csh = np.dot(self._get_s_half(), c_space)
-        p = np.dot(csh[aos].T, csh[aos])          # eigenvalues in [0, 1]
-        p = (p + p.T) / 2
-        w, r = np.linalg.eigh(p)
-        w, r = w[::-1], r[:, ::-1]                # descending, as elsewhere in Vayesta
+        b = self._ligand_bmat(c_space)                   # (norb, n_lig_ao)
+        u, s, _ = np.linalg.svd(b, full_matrices=False)  # thin
+        w = s ** 2                                       # descending, in [0, 1]
         mask = w >= tol
-        return np.dot(c_space, r[:, mask]), np.dot(c_space, r[:, ~mask]), w, mask
+        k = int(mask.sum())
+        if k == 0:
+            return np.zeros((nao, 0)), c_space, w, mask
+        q, _ = qr(u[:, mask], mode="full")
+        return np.dot(c_space, q[:, :k]), np.dot(c_space, q[:, k:]), w, mask
 
     def _add_ligand_env(self, c_near, c_far):
         """Move remaining ligand character from the rcut-far env into the active
