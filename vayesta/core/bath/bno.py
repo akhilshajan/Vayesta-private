@@ -192,6 +192,10 @@ class BNO_Bath(Bath):
         u, s, _ = np.linalg.svd(b, full_matrices=False)  # thin
         w = s ** 2                                       # descending, in [0, 1]
         mask = w >= tol
+        # AS: P_L has rank <= n_lig_ao; anything beyond that is numerical noise
+        nrank = len(self._get_ligand_aos())
+        if mask.sum() > nrank:
+            mask[nrank:] = False
         k = int(mask.sum())
         if k == 0:
             return np.zeros((nao, 0)), c_space, w, mask
@@ -226,11 +230,17 @@ class BNO_Bath(Bath):
                       c_lig.shape[-1], n_add)
         self.log.info("  left frozen:        population %.4f", n_left)
         if len(w):
-            self.log.info("  far ligand weights: kept min= %.4f  discarded max= %.4f",
+            self.log.info("  far ligand weights: kept min= %.3g  discarded max= %.3g",
                           (w[mask][-1] if np.any(mask) else 0.0),
                           (w[~mask][0] if np.any(~mask) else 0.0))
-        if n_left > 0.05:
-            self.log.warning("  %.4f ligand population still frozen - lower ligand_tol", n_left)
+        n_tot = n_clu + n_near + n_far
+        if n_tot > 1e-12:
+            self.log.info("  ligand captured: %.2f%%",
+                          100 * (n_clu + n_near + n_add) / n_tot)
+            if n_left > 0.05 * n_tot:
+                self.log.warning("  %.4f of %.4f ligand population still frozen (%.1f%%)"
+                                 " - consider lowering ligand_tol",
+                                 n_left, n_tot, 100 * n_left / n_tot)
         return np.hstack((c_near, c_lig)), c_far_new
 
     def kernel(self):
@@ -327,6 +337,15 @@ class BNO_Bath(Bath):
         c_far = getattr(self, "_c_env_frozen", None)
         if c_far is not None and c_far.shape[-1] > 0:
             c_rest = np.hstack((c_rest, c_far))
+        # AS: how much ligand character survived BNO truncation at this eta
+        if verbose and self._get_ligand_atoms():
+            n_in = self._ligand_population(c_bath)
+            n_out = self._ligand_population(c_rest)
+            tot = n_in + n_out
+            self.log.info("  Ligand population after BNO truncation (%s): "
+                          "bath %.4f / discarded %.4f (%.1f%% retained)",
+                          self.occtype, n_in, n_out,
+                          100 * n_in / tot if tot > 1e-12 else 0.0)
         return c_bath, c_rest
 
     def get_active_space(self, c_active=None):
@@ -370,7 +389,7 @@ class BNO_Bath(Bath):
             # this matches r2bath.py as provided.
             r2bath = R2_Bath_RHF(self.fragment, dmet_bath, occtype)
             c_near, c_far = r2bath.get_bath(rcut, unit=rcut_unit)
-            return c_near, c_far
+            return self._add_ligand_env(c_near, c_far)
 
         if self.occtype == "occupied":
             if c_active is None:
