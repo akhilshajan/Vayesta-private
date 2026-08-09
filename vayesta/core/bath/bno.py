@@ -788,8 +788,16 @@ class MP2_BNO_Bath(BNO_Bath):
         # Define local atoms (deterministic)
         center_atom = int(self.fragment.atoms[0])
         atoms_support = atoms_within_rcut(self.mol, center_atom, rcut=float(rcut), unit=rcut_unit)
-        atoms_aux = expand_atoms_by_distance(self.mol, atoms_support, float(local_aux_radius), unit=local_aux_unit)
+        # AS: the aux domain must cover every atom carrying orbitals we transform:
+        # all fragment atoms (not just atoms[0]) and the ligands.
+        atoms_support = set(map(int, atoms_support)) | {int(center_atom)}
+        atoms_support |= {int(a) for a in self.fragment.atoms}
+        atoms_support |= set(self._get_ligand_atoms())
+        atoms_aux = expand_atoms_by_distance(self.mol, sorted(atoms_support),
+                                             float(local_aux_radius), unit=local_aux_unit)
         atoms_aux = sorted(set(map(int, atoms_aux)))
+        self.log.info("Local aux: %d support / %d aux atoms of %d",
+                      len(atoms_support), len(atoms_aux), self.mol.natm)
 
         # Cache container on embedding object (shared across occ/vir instances)
         if not hasattr(self.base, "_local_aux_ctx_cache"):
