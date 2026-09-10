@@ -45,6 +45,20 @@ def _mol_fingerprint(mol):
     h.update(str(mol.basis).encode())
     h.update(np.asarray(coords, dtype=np.float64).tobytes())
     return h.hexdigest()
+
+
+def _mo_fingerprint(mo_coeff, mo_occ):
+    """Fingerprint of the MO coefficients/occupations used to build IAOs.
+
+    Needed in addition to _mol_fingerprint: two calls can share the same molecule
+    (geometry+basis) but use different orbitals - e.g. the alpha and beta channels of an
+    unrestricted calculation, or two different mean-field references - and must not be
+    conflated in the cache.
+    """
+    h = hashlib.sha1()
+    h.update(np.asarray(mo_coeff, dtype=np.float64).tobytes())
+    h.update(np.asarray(mo_occ, dtype=np.float64).tobytes())
+    return h.hexdigest()
 #########AS#########
 
 
@@ -87,7 +101,7 @@ class IAO_Fragmentation(Fragmentation):
         return self.refmol.nao
 
 #########AS#########
-    def _try_load_cache(self, add_virtuals):
+    def _try_load_cache(self, add_virtuals, mo_fp):
         if not self.cache_file:
             self.log.info("IAO cache disabled (cache_file is None/empty).")
             return None
@@ -102,6 +116,9 @@ class IAO_Fragmentation(Fragmentation):
                     return None
                 if f.attrs.get("mol_fp", "") != self._mol_fp:
                     self.log.info("IAO CACHE MISS: molecule fingerprint mismatch")
+                    return None
+                if f.attrs.get("mo_fp", "") != mo_fp:
+                    self.log.info("IAO CACHE MISS: MO coefficient/occupation fingerprint mismatch")
                     return None
                 if f.attrs.get("basis", "") != str(self.mol.basis):
                     self.log.info("IAO CACHE MISS: basis mismatch")
@@ -120,7 +137,7 @@ class IAO_Fragmentation(Fragmentation):
             self.log.warning("IAO CACHE MISS: failed reading %s (%s)", self.cache_file, e)
             return None
 
-    def _write_cache(self, c_iao, add_virtuals):
+    def _write_cache(self, c_iao, add_virtuals, mo_fp):
         if not self.cache_file:
             return
         tmp = self.cache_file + ".tmp"
@@ -128,6 +145,7 @@ class IAO_Fragmentation(Fragmentation):
             with h5py.File(tmp, "w") as f:
                 f.attrs["name"] = "vayesta-iao-cache"
                 f.attrs["mol_fp"] = self._mol_fp
+                f.attrs["mo_fp"] = mo_fp
                 f.attrs["basis"] = str(self.mol.basis)
                 f.attrs["minao"] = str(self.minao)
                 f.attrs["add_virtuals"] = bool(add_virtuals)
@@ -154,17 +172,18 @@ class IAO_Fragmentation(Fragmentation):
         c_iao : (n(AO), n(IAO)) array
             Orthonormalized IAO coefficients.
         """
+        if mo_coeff is None:
+            mo_coeff = self.mo_coeff
+        if mo_occ is None:
+            mo_occ = self.mo_occ
 #########AS#########
-        cached = self._try_load_cache(add_virtuals=add_virtuals)
+        mo_fp = _mo_fingerprint(mo_coeff, mo_occ)
+        cached = self._try_load_cache(add_virtuals=add_virtuals, mo_fp=mo_fp)
         if cached is not None:
             return cached
 
         self.log.info("IAO: building IAOs from scratch (cache miss).")
 #########AS#########
-        if mo_coeff is None:
-            mo_coeff = self.mo_coeff
-        if mo_occ is None:
-            mo_occ = self.mo_occ
         ovlp = self.get_ovlp()
 
         c_occ = mo_coeff[:, mo_occ > 0]
@@ -197,7 +216,7 @@ class IAO_Fragmentation(Fragmentation):
         # Test orthogonality of IAO
         self.check_orthonormal(c_iao)
 #########AS#########
-        self._write_cache(c_iao, add_virtuals=add_virtuals)
+        self._write_cache(c_iao, add_virtuals=add_virtuals, mo_fp=mo_fp)
 #########AS#########
         return c_iao
 
