@@ -835,14 +835,25 @@ class MP2_BNO_Bath(BNO_Bath):
             c_active_occ, c_active_vir, actspace_orig.c_frozen_occ, actspace_orig.c_frozen_vir
         )
 
-        nocc_a = actspace.c_active_occ.shape[-1]
-        nvir_a = actspace.c_active_vir.shape[-1]
-        nocc_f = actspace.c_frozen_occ.shape[-1]
-        nvir_f = actspace.c_frozen_vir.shape[-1]
-        self.log.info(
-                "ClusterRHF(norb_active=%d, norb_frozen=%d)  [occA=%d virA=%d occF=%d virF=%d]",
-                nocc_a + nvir_a, nocc_f + nvir_f, nocc_a, nvir_a, nocc_f, nvir_f
-        )
+        if self.spin_restricted:
+            nocc_a = actspace.c_active_occ.shape[-1]
+            nvir_a = actspace.c_active_vir.shape[-1]
+            nocc_f = actspace.c_frozen_occ.shape[-1]
+            nvir_f = actspace.c_frozen_vir.shape[-1]
+            self.log.info(
+                    "ClusterRHF(norb_active=%d, norb_frozen=%d)  [occA=%d virA=%d occF=%d virF=%d]",
+                    nocc_a + nvir_a, nocc_f + nvir_f, nocc_a, nvir_a, nocc_f, nvir_f
+            )
+        else:
+            # Unrestricted: c_active_occ/c_active_vir/c_frozen_occ/c_frozen_vir are (alpha, beta) tuples.
+            nocc_a = actspace.c_active_occ[0].shape[-1] + actspace.c_active_occ[1].shape[-1]
+            nvir_a = actspace.c_active_vir[0].shape[-1] + actspace.c_active_vir[1].shape[-1]
+            nocc_f = actspace.c_frozen_occ[0].shape[-1] + actspace.c_frozen_occ[1].shape[-1]
+            nvir_f = actspace.c_frozen_vir[0].shape[-1] + actspace.c_frozen_vir[1].shape[-1]
+            self.log.info(
+                    "ClusterUHF(norb_active=%d, norb_frozen=%d)  [occA=%d virA=%d occF=%d virF=%d]",
+                    nocc_a + nvir_a, nocc_f + nvir_f, nocc_a, nvir_a, nocc_f, nvir_f
+            )
 
         #import pdb; pdb.set_trace()
 
