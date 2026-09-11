@@ -32,16 +32,6 @@ from vayesta.misc import solids
 PYSCF_VERBOSITY = 0
 
 
-def _fci_hf_ci0(norb, nelec):
-    """Single-determinant (mean-field) FCI initial guess, for the fallback in rfci()/ufci()."""
-    neleca, nelecb = nelec
-    na = pyscf.fci.cistring.num_strings(norb, neleca)
-    nb = pyscf.fci.cistring.num_strings(norb, nelecb)
-    ci0 = np.zeros(na * nb)
-    ci0[0] = 1.0
-    return ci0
-
-
 class TestMolecule:
     """Molecular test system."""
 
@@ -98,7 +88,14 @@ class TestMolecule:
         # infinite loop if it doesn't.
         for i in range(5):
             # Check stability of current solution.
-            int_c, ext_c, int_stab, ext_stab = uhf.stability(return_status=True)
+            try:
+                int_c, ext_c, int_stab, ext_stab = uhf.stability(return_status=True)
+            except pyscf.lib.exceptions.LinearDependencyError:
+                # Degenerate systems can produce a zero trial vector in the stability solver.
+                # In this case, keep the converged broken-symmetry solution.
+                if uhf.converged:
+                    return uhf
+                raise
             # If we have a converged solution which is stable return.
             if int_stab and uhf.converged:
                 return uhf
@@ -154,15 +151,7 @@ class TestMolecule:
         rfci.threads = 1
         rfci.conv_tol = 1e-12
         rfci.davidson_only = True
-        try:
-            rfci.kernel()
-        except pyscf.lib.exceptions.LinearDependencyError:
-            # Degenerate systems can produce a zero trial vector in the Davidson solver's
-            # automatic initial guess (BLAS-backend dependent; observed with Intel MKL). Retry
-            # with an explicit single-determinant guess to sidestep the degenerate tie-break.
-            mf = self.rhf()
-            norb = mf.mo_coeff.shape[-1]
-            rfci.kernel(ci0=_fci_hf_ci0(norb, mf.mol.nelec))
+        rfci.kernel()
         return rfci
 
     @cache
@@ -171,15 +160,7 @@ class TestMolecule:
         ufci.threads = 1
         ufci.conv_tol = 1e-12
         ufci.davidson_only = True
-        try:
-            ufci.kernel()
-        except pyscf.lib.exceptions.LinearDependencyError:
-            # Degenerate systems can produce a zero trial vector in the Davidson solver's
-            # automatic initial guess (BLAS-backend dependent; observed with Intel MKL). Retry
-            # with an explicit single-determinant guess to sidestep the degenerate tie-break.
-            mf = self.uhf()
-            norb = mf.mo_coeff[0].shape[-1]
-            ufci.kernel(ci0=_fci_hf_ci0(norb, mf.mol.nelec))
+        ufci.kernel()
         return ufci
 
 
