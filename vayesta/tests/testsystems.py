@@ -143,7 +143,6 @@ class TestMolecule:
         rfci = pyscf.fci.FCI(self.rhf())
         rfci.threads = 1
         rfci.conv_tol = 1e-12
-        rfci.davidson_only = True
         rfci.kernel()
         return rfci
 
@@ -152,7 +151,6 @@ class TestMolecule:
         ufci = pyscf.fci.FCI(self.uhf())
         ufci.threads = 1
         ufci.conv_tol = 1e-12
-        ufci.davidson_only = True
         ufci.kernel()
         return ufci
 
