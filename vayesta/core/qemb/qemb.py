@@ -93,6 +93,8 @@ class Options(OptionsBase):
         local_aux_unit="Ang",
         local_aux_atom_weight_thresh=1e-4,
         local_aux_print=False,
+        ligand_atoms=None,
+        ligand_tol=0.1,
         # EwDMET bath
         order=None,
         max_order=20,  # +threshold (same as MP2 bath)

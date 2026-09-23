@@ -108,6 +108,141 @@ class BNO_Bath(Bath):
         if self.occtype == "virtual":
             return self.dmet_bath.c_cluster_vir.shape[-1]
 
+    # =====================================================================
+    # AS: ligand orbitals - always included in the MP2 bath active space
+    #     Scope: RHF, molecular (non-periodic). ligand_atoms is 0-based.
+    # =====================================================================
+    def _get_bath_opts(self):
+        try:
+            return self.base.opts.bath_options
+        except Exception:
+            return {}
+
+    def _get_ligand_atoms(self):
+        """Explicit 0-based ligand atom indices from bath_options['ligand_atoms']."""
+        lig = self._get_bath_opts().get("ligand_atoms", None)
+        if lig is None:
+            return []
+        if self.spin_unrestricted:
+            raise NotImplementedError(
+                "ligand_atoms is not supported for UHF (RHF only). "
+                "Remove ligand_atoms from bath_options or use an RHF reference."
+            )
+        def _parse(entry):
+            if isinstance(entry, str):
+                parts = entry.replace(" ", "").split("-")
+                if len(parts) == 2:
+                    return list(range(int(parts[0]), int(parts[1]) + 1))   # inclusive
+                return [int(parts[0])]
+            try:
+                return list(entry)          # range, list, tuple, ndarray
+            except TypeError:
+                return [int(entry)]         # bare int
+
+        if isinstance(lig, (str, range, int)):
+            lig = [lig]
+        atoms = sorted({int(a) for e in lig for a in _parse(e)})
+        for a in atoms:
+            if not (0 <= a < self.mol.natm):
+                raise ValueError(
+                    "ligand_atoms: index %d out of range (natm= %d; indices are 0-based)"
+                    % (a, self.mol.natm)
+                )
+        return atoms
+
+    def _get_ligand_aos(self):
+        atoms = self._get_ligand_atoms()
+        if not atoms:
+            return np.zeros(0, dtype=int)
+        aoslice = self.mol.aoslice_by_atom()
+        return np.hstack([np.arange(aoslice[a][2], aoslice[a][3]) for a in atoms])
+
+    def _ligand_bmat(self, c):
+        """b with <psi|P_L|psi> = b b^T, shape (norb, n_lig_ao).
+        P_L = |X_L>(S_LL)^-1<X_L|. Never forms a norb x norb matrix."""
+        from scipy.linalg import cholesky, solve_triangular
+        aos = self._get_ligand_aos()
+        if len(aos) == 0 or c.shape[-1] == 0:
+            return np.zeros((c.shape[-1], 0))
+        ovlp = self.fragment.base.get_ovlp()
+        a = np.dot(c.T, ovlp[:, aos])                    # (norb, n_lig_ao)
+        s_ll = ovlp[np.ix_(aos, aos)]
+        try:
+            lmat = cholesky(s_ll, lower=True)
+            return solve_triangular(lmat, a.T, lower=True).T
+        except np.linalg.LinAlgError:
+            w, v = np.linalg.eigh(s_ll)
+            keep = w > 1e-10
+            return np.dot(a, v[:, keep] / np.sqrt(w[keep]))
+
+    def _ligand_population(self, c):
+        """Ligand population carried by an orthonormal set c."""
+        if c.shape[-1] == 0 or len(self._get_ligand_aos()) == 0:
+            return 0.0
+        return float(np.sum(self._ligand_bmat(c) ** 2))
+
+    def _split_ligand(self, c_space, tol):
+        """Split orthonormal c_space into (ligand-character, remainder).
+        Selection is O(norb * n_lig_ao^2), not O(norb^3)."""
+        from scipy.linalg import qr
+        nao, norb = c_space.shape
+        if len(self._get_ligand_aos()) == 0 or norb == 0:
+            return np.zeros((nao, 0)), c_space, np.zeros(0), np.zeros(0, dtype=bool)
+        b = self._ligand_bmat(c_space)                   # (norb, n_lig_ao)
+        u, s, _ = np.linalg.svd(b, full_matrices=False)  # thin
+        w = s ** 2                                       # descending, in [0, 1]
+        mask = w >= tol
+        # AS: P_L has rank <= n_lig_ao; anything beyond that is numerical noise
+        nrank = len(self._get_ligand_aos())
+        if mask.sum() > nrank:
+            mask[nrank:] = False
+        k = int(mask.sum())
+        if k == 0:
+            return np.zeros((nao, 0)), c_space, w, mask
+        q, _ = qr(u[:, mask], mode="full")
+        return np.dot(c_space, q[:, :k]), np.dot(c_space, q[:, k:]), w, mask
+
+    def _add_ligand_env(self, c_near, c_far):
+        """Move remaining ligand character from the rcut-far env into the active
+        (near) env, so that MP2 correlates it. BNO truncation then filters the
+        enlarged space as usual."""
+        atoms = self._get_ligand_atoms()
+        if not atoms or c_far.shape[-1] == 0:
+            return c_near, c_far
+        tol = float(self._get_bath_opts().get("ligand_tol", 0.1))
+        naos = len(self._get_ligand_aos())
+
+        c_clu = self.c_cluster_occ if self.occtype == "occupied" else self.c_cluster_vir
+        n_clu = self._ligand_population(c_clu)
+        n_near = self._ligand_population(c_near)
+        n_far = self._ligand_population(c_far)
+
+        c_lig, c_far_new, w, mask = self._split_ligand(c_far, tol)
+        n_add = self._ligand_population(c_lig)
+        n_left = self._ligand_population(c_far_new)
+
+        self.log.info("Ligand env (%s): atoms= %r (%d AOs), tol= %.3g",
+                      self.occtype, atoms, naos, tol)
+        self.log.info("  sector ligand population = %.4f "
+                      "[DMET cluster %.4f | rcut-near %.4f | rcut-far %.4f]",
+                      n_clu + n_near + n_far, n_clu, n_near, n_far)
+        self.log.info("  moved far -> active: %d orbitals, population %.4f",
+                      c_lig.shape[-1], n_add)
+        self.log.info("  left frozen:        population %.4f", n_left)
+        if len(w):
+            self.log.info("  far ligand weights: kept min= %.3g  discarded max= %.3g",
+                          (w[mask][-1] if np.any(mask) else 0.0),
+                          (w[~mask][0] if np.any(~mask) else 0.0))
+        n_tot = n_clu + n_near + n_far
+        if n_tot > 1e-12:
+            self.log.info("  ligand captured: %.2f%%",
+                          100 * (n_clu + n_near + n_add) / n_tot)
+            if n_left > 0.05 * n_tot:
+                self.log.warning("  %.4f of %.4f ligand population still frozen (%.1f%%)"
+                                 " - consider lowering ligand_tol",
+                                 n_left, n_tot, 100 * n_left / n_tot)
+        return np.hstack((c_near, c_lig)), c_far_new
+
     def kernel(self):
         c_env = self.c_env
         if self.spin_restricted and (c_env.shape[-1] == 0):
@@ -196,6 +331,21 @@ class BNO_Bath(Bath):
             log_space("Rest", occup[bno_number:])
 
         c_bath, c_rest = np.hsplit(coeff, [bno_number])
+        # AS: restore the rcut-frozen far env into the cluster frozen space.
+        # Without this the far orbitals are dropped from the Cluster entirely
+        # and make_frozen_rdm1() is missing their density.
+        c_far = getattr(self, "_c_env_frozen", None)
+        if c_far is not None and c_far.shape[-1] > 0:
+            c_rest = np.hstack((c_rest, c_far))
+        # AS: how much ligand character survived BNO truncation at this eta
+        if verbose and self._get_ligand_atoms():
+            n_in = self._ligand_population(c_bath)
+            n_out = self._ligand_population(c_rest)
+            tot = n_in + n_out
+            self.log.info("  Ligand population after BNO truncation (%s): "
+                          "bath %.4f / discarded %.4f (%.1f%% retained)",
+                          self.occtype, n_in, n_out,
+                          100 * n_in / tot if tot > 1e-12 else 0.0)
         return c_bath, c_rest
 
     def get_active_space(self, c_active=None):
@@ -239,7 +389,7 @@ class BNO_Bath(Bath):
             # this matches r2bath.py as provided.
             r2bath = R2_Bath_RHF(self.fragment, dmet_bath, occtype)
             c_near, c_far = r2bath.get_bath(rcut, unit=rcut_unit)
-            return c_near, c_far
+            return self._add_ligand_env(c_near, c_far)
 
         if self.occtype == "occupied":
             if c_active is None:
@@ -251,6 +401,7 @@ class BNO_Bath(Bath):
                 c_active_occ = spinalg.hstack_matrices(dmet_bath.c_cluster_occ, c_env_occ_near)  # AS
                 if rcut is not None:
                     self._c_env_active = c_env_occ_near
+                    self._c_env_frozen = c_env_occ_far
             else:
                 c_active_occ = c_active
 
@@ -282,6 +433,7 @@ class BNO_Bath(Bath):
                 c_active_vir = spinalg.hstack_matrices(dmet_bath.c_cluster_vir, c_env_vir_near)  # AS
                 if rcut is not None:
                     self._c_env_active = c_env_vir_near
+                    self._c_env_frozen = c_env_vir_far
             else:
                 c_active_vir = c_active
 
@@ -636,8 +788,16 @@ class MP2_BNO_Bath(BNO_Bath):
         # Define local atoms (deterministic)
         center_atom = int(self.fragment.atoms[0])
         atoms_support = atoms_within_rcut(self.mol, center_atom, rcut=float(rcut), unit=rcut_unit)
-        atoms_aux = expand_atoms_by_distance(self.mol, atoms_support, float(local_aux_radius), unit=local_aux_unit)
+        # AS: the aux domain must cover every atom carrying orbitals we transform:
+        # all fragment atoms (not just atoms[0]) and the ligands.
+        atoms_support = set(map(int, atoms_support)) | {int(center_atom)}
+        atoms_support |= {int(a) for a in self.fragment.atoms}
+        atoms_support |= set(self._get_ligand_atoms())
+        atoms_aux = expand_atoms_by_distance(self.mol, sorted(atoms_support),
+                                             float(local_aux_radius), unit=local_aux_unit)
         atoms_aux = sorted(set(map(int, atoms_aux)))
+        self.log.info("Local aux: %d support / %d aux atoms of %d",
+                      len(atoms_support), len(atoms_aux), self.mol.natm)
 
         # Cache container on embedding object (shared across occ/vir instances)
         if not hasattr(self.base, "_local_aux_ctx_cache"):
