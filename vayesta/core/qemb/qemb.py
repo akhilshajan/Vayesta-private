@@ -95,6 +95,8 @@ class Options(OptionsBase):
         local_aux_print=False,
         ligand_atoms=None,
         ligand_tol=0.1,
+        # Coupled MP2 bath (bathtype="mp2coupled"): (c_os, c_ss) weights of the BNO density, or "mp2" / "scs"
+        coupled_weights=(1.0, 1.0),
         # EwDMET bath
         order=None,
         max_order=20,  # +threshold (same as MP2 bath)
