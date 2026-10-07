@@ -23,8 +23,9 @@ rcut near/far split
     integrals in row blocks (~lean_r2_block AOs x all AOs) contracted with the candidates block by block, so the
     n(AO)^2 matrix is never stored. (The candidates are combinations of delocalized MOs with tails on every atom,
     so restricting the integrals to "local" AOs is not safe.) near = sqrt(eig) <= rcut, as in R2_Bath_RHF.
-    Validated against R2_Bath_RHF on trypsin (STO-3G): buffer 3 A with sv_tol 1e-6 reproduces the near spaces and
-    clusters exactly (COUPLED_PIPELINE/validation, job 6574324). Other basis sets need their own check.
+    Validated against R2_Bath_RHF on trypsin (STO-3G): buffers >= 3 A reproduce the near spaces and clusters exactly
+    (COUPLED_PIPELINE/validation, job 6574324); the default lean_buffer is 4 A for margin. Other basis sets need
+    their own check.
 
 Far environment
     Never formed. Clusters carry only the explicit near-space orbitals in their frozen space; the far counts are
@@ -194,7 +195,7 @@ def lean_env_split(fragment, dmet_bath, occtype):
     opts = base.opts.bath_options
     unit = opts.get("unit", "Ang")
     rcut = _to_bohr(opts["rcut"], unit)
-    buffer = _to_bohr(opts.get("lean_buffer", 3.0), unit)
+    buffer = _to_bohr(opts.get("lean_buffer", 4.0), unit)
     sv_tol = float(opts.get("lean_sv_tol", 1e-6))
     r2_block = int(opts.get("lean_r2_block", 1000))
     key = (id(dmet_bath), occtype, rcut, buffer, sv_tol)

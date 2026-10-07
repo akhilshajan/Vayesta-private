@@ -100,7 +100,7 @@ class Options(OptionsBase):
         # Lean path (core/bath/lean.py): DMET bath and rcut split without explicit environment orbitals.
         # Opt-in; requires rcut, RHF, bathtype mp2/mp2coupled.
         lean=False,
-        lean_buffer=3.0,  # local AO region = atoms within rcut + lean_buffer (unit as rcut)
+        lean_buffer=4.0,  # local AO region = atoms within rcut + lean_buffer (unit as rcut)
         lean_sv_tol=1e-6,  # singular-value cut of the local candidate directions
         lean_r2_block=1000,  # AO rows per block of the <r^2> integrals (memory: block x n(AO) x 8 bytes)
         # EwDMET bath
