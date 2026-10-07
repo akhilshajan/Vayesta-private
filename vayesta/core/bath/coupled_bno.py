@@ -28,6 +28,7 @@ import numpy as np
 from vayesta.core.util import brange, dot, einsum, fix_orbital_sign, hstack, time_string, timer
 from vayesta.core.types import Cluster
 from vayesta.core.bath.bno import MP2_BNO_Bath
+from vayesta.core.bath.lean import lean_enabled, lean_env_split
 
 SCS_WEIGHTS = (1.2, 1.0 / 3.0)
 
@@ -99,6 +100,10 @@ class MP2_Coupled_BNO_Bath(MP2_BNO_Bath):
     # --- environment, split by rcut (both sides, independent of self.occtype)
     def _env_split(self, occtype):
         dmet = self.dmet_bath
+        if lean_enabled(self.base):
+            # Lean path: near space without the explicit environment; the far part stays implicit
+            c_near = lean_env_split(self.fragment, dmet, occtype)
+            return c_near, np.zeros((c_near.shape[0], 0))
         c_env = dmet.c_env_occ if occtype == "occupied" else dmet.c_env_vir
         opts = self._get_bath_opts()
         rcut = opts.get("rcut", None)

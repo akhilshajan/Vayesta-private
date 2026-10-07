@@ -6,6 +6,7 @@ import re
 
 from vayesta.core.util import dot, fix_orbital_sign, time_string, timer
 from vayesta.core.fragmentation import helper
+from vayesta.core.bath.lean import lean_enabled
 
 
 def check_orthonormal(log, mo_coeff, ovlp, mo_name="orbital", tol=1e-7):
@@ -174,7 +175,8 @@ class Fragmentation:
         if len(indices) == 0:
             raise ValueError("Fragment %s is empty." % name)
         c_frag = self.get_frag_coeff(indices)
-        c_env = self.get_env_coeff(indices)
+        # Lean path (bath_options["lean"]): the environment is never formed explicitly
+        c_env = None if lean_enabled(self.emb) else self.get_env_coeff(indices)
         fid, mpirank = self.emb.register.get_next()
         frag = self.emb.Fragment(self.emb, fid, name, c_frag, c_env, mpi_rank=mpirank, **kwargs)
         self.fragments.append(frag)

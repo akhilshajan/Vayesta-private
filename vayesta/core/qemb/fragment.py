@@ -40,6 +40,7 @@ from vayesta.core.bath import MP2_Bath
 from vayesta.core.bath import MP2_Coupled_Bath
 from vayesta.core.bath import Full_Bath
 from vayesta.core.bath import R2_Bath
+from vayesta.core.bath.lean import LeanDMET_Bath_RHF, check_lean_supported, frozen_rdm1_lean, lean_enabled
 from vayesta.core.bath import RPA_Bath
 
 # Bosonic Bath
@@ -864,7 +865,12 @@ class Fragment:
 
     def make_bath(self):
         # --- DMET bath
-        dmet = DMET_Bath(self, dmet_threshold=self.opts.bath_options["dmet_threshold"])
+        if lean_enabled(self.base):
+            # Lean path (core/bath/lean.py): no explicit environment orbitals
+            check_lean_supported(self)
+            dmet = LeanDMET_Bath_RHF(self, dmet_threshold=self.opts.bath_options["dmet_threshold"])
+        else:
+            dmet = DMET_Bath(self, dmet_threshold=self.opts.bath_options["dmet_threshold"])
         dmet.kernel()
         self._dmet_bath = dmet
 
@@ -961,6 +967,15 @@ class Fragment:
         if self._get_bath_option("canonicalize", "virtual"):
             c_active_vir = self.canonicalize_mo(c_active_vir)[0]
         cluster = Cluster.from_coeffs(c_active_occ, c_active_vir, c_frozen_occ, c_frozen_vir)
+        if lean_enabled(self.base):
+            # Lean path: the far environment is implicit; record its size and how to get its density
+            dmet = self._dmet_bath
+            # environment = BNO bath (active) + explicit frozen (near-space rest) + implicit far
+            nbath_occ = c_active_occ.shape[-1] - dmet.c_cluster_occ.shape[-1]
+            nbath_vir = c_active_vir.shape[-1] - dmet.c_cluster_vir.shape[-1]
+            cluster.lean_nocc_far = dmet.n_env_occ - nbath_occ - c_frozen_occ.shape[-1]
+            cluster.lean_nvir_far = dmet.n_env_vir - nbath_vir - c_frozen_vir.shape[-1]
+            cluster.frozen_rdm1_func = lambda: frozen_rdm1_lean(self.base, cluster)
 
         # Check occupations
         def check_occup(mo_coeff, expected):

@@ -5,6 +5,7 @@ from vayesta.core import spinalg
 from vayesta.core.types import Cluster
 from vayesta.core.bath import helper
 from vayesta.core.bath.bath import Bath
+from vayesta.core.bath.lean import lean_enabled, lean_env_split
 
 # AS: local-aux embedding helper
 import pyscf
@@ -94,6 +95,9 @@ class BNO_Bath(Bath):
         c = getattr(self, "_c_env_active", None)
         if c is not None:
             return c
+        # Lean path: only the near (rcut) environment exists
+        if lean_enabled(self.base):
+            return lean_env_split(self.fragment, self.dmet_bath, self.occtype)
 
         # Orginal (kept)
         if self.occtype == "occupied":
@@ -372,8 +376,13 @@ class BNO_Bath(Bath):
         rcut_unit = bath_opts.get("unit", "Ang")
         env_complement_thresh = getattr(self.opts, "env_complement_thresh", 1e-8) if hasattr(self, "opts") else 1e-8
 
+        lean = lean_enabled(self.base)
+
         # AS: local helper to obtain (env_near, env_far) for a requested occtype
         def _split_env_by_r2(occtype):
+            # Lean path: near space without the explicit environment; the far part stays implicit
+            if lean:
+                return lean_env_split(self.fragment, dmet_bath, occtype), empty
             # Default (no screening): keep original behavior
             if rcut is None:
                 if occtype == "occupied":
@@ -421,7 +430,7 @@ class BNO_Bath(Bath):
 
             # ORIGINAL (kept)
             c_active_vir = dmet_bath.c_cluster_vir
-            c_frozen_vir = dmet_bath.c_env_vir
+            c_frozen_vir = empty if lean else dmet_bath.c_env_vir  # lean: implicit
 
         elif self.occtype == "virtual":
             if c_active is None:
@@ -450,7 +459,7 @@ class BNO_Bath(Bath):
             # ORIGINAL occupied-handling logic (kept)
             if self.c_buffer is None:
                 c_active_occ = dmet_bath.c_cluster_occ
-                c_frozen_occ = dmet_bath.c_env_occ
+                c_frozen_occ = empty if lean else dmet_bath.c_env_occ  # lean: implicit
             else:
                 c_active_occ = spinalg.hstack_matrices(dmet_bath.c_cluster_occ, self.c_buffer)
                 ovlp = self.fragment.base.get_ovlp()
@@ -1030,6 +1039,9 @@ class MP2_BNO_Bath(BNO_Bath):
             dm = self._rotate_dm(dm, r_vir)
         # --- Diagonalize environment-environment block
         dm = self._dm_take_env(dm)
+        if self.spin_restricted and dm.shape[0] == 0:
+            # no environment orbitals inside rcut on this side: no BNOs
+            return self.c_env, np.zeros(0), ecorr
         t0 = timer()
         r_bno, n_bno = self._diagonalize_dm(dm)
         t_diag = timer() - t0

@@ -152,6 +152,10 @@ class ClusterRHF(Cluster):
         return list(range(self.nocc_frozen)) + list(range(self.norb_total - self.nvir_frozen, self.norb_total))
 
     def make_frozen_rdm1(self) -> np.ndarray:
+        # Lean path: the far environment is not stored; the fragment sets a function for the full frozen DM
+        func = getattr(self, "frozen_rdm1_func", None)
+        if func is not None:
+            return func()
         return 2*np.dot(self.c_frozen_occ, self.c_frozen_occ.T)
 
     def repr_size(self):
