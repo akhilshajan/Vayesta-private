@@ -117,6 +117,11 @@ class LeanDMET_Bath_RHF(DMET_Bath_RHF):
         phi = np.dot(c_occ, u[:, idx])
         f = np.dot(c_frag, vh.T[:, idx])
         c_dmet = (phi - f * sv[idx]) / np.sqrt(lam[idx])
+        # Dividing by sqrt(1 - s^2) amplifies rounding errors for weakly entangled partners: restore exact
+        # orthogonality to the fragment and orthonormality (Loewdin, k x k; the space is unchanged)
+        c_dmet -= np.dot(c_frag, np.dot(c_frag.T, np.dot(ovlp, c_dmet)))
+        e, v = np.linalg.eigh(np.dot(c_dmet.T, np.dot(ovlp, c_dmet)))
+        c_dmet = np.dot(c_dmet, np.dot(v / np.sqrt(e), v.T))
         c_dmet = fix_orbital_sign(c_dmet)[0]
         n_dmet = lam[idx]
         # Log as make_dmet_bath (entanglement of all partner orbitals; the others have eigenvalues 0 or 1)

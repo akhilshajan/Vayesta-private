@@ -50,6 +50,8 @@ class LeanPathTest(TestCase):
             cs, cl = fs.cluster, fl.cluster
             self.assertIsNone(fl.c_env)
             self.assertIsNone(fl._dmet_bath.c_env_occ)
+            c = np.hstack((fl.c_frag, fl._dmet_bath.c_dmet))
+            self.assertAllclose(c.T @ ovlp @ c, np.eye(c.shape[-1]), atol=1e-12, rtol=0)
             self.assertEqual(cl.norb_active, cs.norb_active)
             self.assertEqual(cl.nocc_active, cs.nocc_active)
             # same active space
