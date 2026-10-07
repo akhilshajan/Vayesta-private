@@ -76,6 +76,13 @@ class Options(OptionsBase):
     )
     global_frag_chempot: float = None  # Global fragment chemical potential (e.g. for democratically partitioned DMs)
     dm_with_frozen: bool = False  # Add frozen parts to cluster DMs
+    # Skip the whole-system mean-field checks of init_mf (E(HF) recomputed vs. mf.e_tot, MO orthonormality).
+    # Only for a mean field that was already checked once, e.g. by the pipeline's Stage 0 (each costs n(AO)^3).
+    skip_mf_checks: bool = False
+    # Fragmentation-context checks on exit (orthogonal / complete / occupied- / virtual-complete). They are only
+    # logged; each builds the full mean-field 1-DM. False skips them (e.g. one-fragment jobs, where "complete"
+    # is always False).
+    fragmentation_checks: bool = True
     # --- Bath options
     bath_options: dict = OptionsBase.dict_with_defaults(
         # General
@@ -388,6 +395,11 @@ class Embedding:
         self._ovlp = self._ovlp_orig
         self._hcore = self._hcore_orig
         self._veff = self._veff_orig
+
+        if self.opts.skip_mf_checks:
+            self.log.info("Mean-field checks skipped (skip_mf_checks=True): E(HF) recompute and MO orthonormality")
+            self.log.info("n(AO)= %d  n(MO)= %s", self.nao, self.nmo)
+            return
 
         # Hartree-Fock energy - this can be different from mf.e_tot, when the mean-field
         # is not a (converged) HF calculations

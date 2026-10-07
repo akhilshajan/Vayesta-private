@@ -85,7 +85,13 @@ class Fragmentation:
         self.log.debug("Adding %d fragments to embedding class", len(self.fragments))
         self.emb.fragments.extend(self.fragments)
 
-        # Check if fragmentation is (occupied) complete and orthonormal:
+        # Check if fragmentation is (occupied) complete and orthonormal (logged only):
+        if not self.emb.opts.fragmentation_checks:
+            self.log.info("Fragmentation checks skipped (fragmentation_checks=False)")
+            self.log.timing("Time for %s fragmentation: %s", self.name, time_string(timer() - self._time0))
+            del self._time0
+            self.log.changeIndentLevel(-1)
+            return
         orth = self.emb.has_orthonormal_fragmentation()
         comp = self.emb.has_complete_fragmentation()
         occcomp = self.emb.has_complete_occupied_fragmentation()

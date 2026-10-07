@@ -98,6 +98,22 @@ class LeanPathTest(TestCase):
         self.assertIsNotNone(emb.fragments[0].c_env)
         self.assertIsNotNone(emb.fragments[0]._dmet_bath.c_env_occ)
 
+    def test_skip_checks(self):
+        """skip_mf_checks / fragmentation_checks only skip checks: identical clusters and energies."""
+        mf = water_chain(8, "sto-3g")
+        for lean in (False, True):
+            ref = run(mf, lean, "mp2coupled", self.atoms[:2])
+            opts = dict(bathtype="mp2coupled", threshold=1e-5, rcut=5.0, lean=lean, coupled_weights="scs")
+            emb = vayesta.ewf.EWF(mf, solver="MP2", bath_options=opts, skip_mf_checks=True, fragmentation_checks=False)
+            with emb.iao_fragmentation() as f:
+                for a in self.atoms[:2]:
+                    f.add_atomic_fragment(a)
+            emb.kernel()
+            self.assertEqual(emb.e_corr, ref.e_corr)
+            for fx, fr in zip(emb.fragments, ref.fragments):
+                self.assertEqual(fx.cluster.norb_active, fr.cluster.norb_active)
+            self.assertAlmostEqual(emb.e_mf, ref.e_mf, delta=1e-12)  # E(HF) still available on demand
+
     def test_unsupported(self):
         mf = water_chain(8, "sto-3g")
         with self.assertRaises(ValueError):  # rcut is required
