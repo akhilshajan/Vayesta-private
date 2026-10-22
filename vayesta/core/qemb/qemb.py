@@ -97,6 +97,14 @@ class Options(OptionsBase):
         project_dmet_order=2,
         project_dmet_mode="squared-entropy",
         addbuffer=False,
+        # Local-aux DF integrals and ligand orbitals (bath/bno)
+        local_aux_enable=False,
+        local_aux_radius=5.0,
+        local_aux_unit="Ang",
+        local_aux_atom_weight_thresh=1e-4,
+        local_aux_print=False,
+        ligand_atoms=None,
+        ligand_tol=0.1,
         # The following options can be set occupied/virtual-specific:
         bathtype_occ=None,
         bathtype_vir=None,
