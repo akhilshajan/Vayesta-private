@@ -10,6 +10,18 @@ import pyscf.ci
 import pyscf.lib
 import pyscf.mp
 
+# Memory budget (bytes) of one block of auxiliary functions in the DF AO->MO loops below; used whenever the caller
+# does not pass `blksize`. Lower it to cap the peak memory of the transformation, e.g.
+#     import vayesta.core.eris; vayesta.core.eris.CDERI_BLOCK_BYTES = 2e8
+CDERI_BLOCK_BYTES = 1e9
+
+
+def cderi_blksize(bytes_per_aux, blksize=None):
+    """Number of auxiliary functions per DF block: `blksize` if given, else as many as fit in CDERI_BLOCK_BYTES."""
+    if blksize is not None:
+        return max(1, int(blksize))
+    return max(1, int(CDERI_BLOCK_BYTES // max(bytes_per_aux, 1)))
+
 
 def get_cderi(emb, mo_coeff, compact=False, blksize=None):
     if compact:
@@ -35,10 +47,10 @@ def get_cderi_df(mf, mo_coeff, compact=False, blksize=None):
     except AttributeError:
         naux = df.get_naoaux()
 
-    cderi = np.zeros((naux, mo_coeff[0].shape[-1], mo_coeff[1].shape[-1]))
+    n1, n2 = mo_coeff[0].shape[-1], mo_coeff[1].shape[-1]
+    cderi = np.zeros((naux, n1, n2))
     cderi_neg = None
-    if blksize is None:
-        blksize = int(1e9 / naux * nao * nao * 8)
+    blksize = cderi_blksize(8 * (nao * nao + nao * n1 + n1 * n2), blksize)
     # PBC:
     if hasattr(df, "sr_loop"):
         blk0 = 0
@@ -88,8 +100,7 @@ def get_cderi_df_exspace(mf, ex_coeff, compact=False, blksize=None):
 
     cderi = np.zeros((naux, ex_coeff.shape[0]))
     cderi_neg = None
-    if blksize is None:
-        blksize = int(1e9 / naux * nao * nao * 8)
+    blksize = cderi_blksize(8 * (nao * nao + ex_coeff.shape[0]), blksize)
     # PBC:
     if hasattr(df, "sr_loop"):
         blk0 = 0

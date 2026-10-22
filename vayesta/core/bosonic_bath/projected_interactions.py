@@ -1,6 +1,7 @@
 import numpy as np
 from vayesta.core.util import einsum, dot
 from vayesta.core.vlog import NoLogger
+from vayesta.core.eris import cderi_blksize
 import pyscf.lib
 
 
@@ -218,8 +219,7 @@ class BosonicHamiltonianProjector:
         nao = self.mf.mol.nao
         df = self.mf.with_df
         naux = self.naux
-        if blksize is None:
-            blksize = int(1e9 / naux * nao * nao * 8)
+        blksize = cderi_blksize(8 * nao * nao, blksize)
         # PBC:
         if hasattr(df, "sr_loop"):
             blk0 = 0
