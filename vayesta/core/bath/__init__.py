@@ -10,6 +10,8 @@ from vayesta.core.bath.bno import BNO_Bath
 from vayesta.core.bath.bno import MP2_BNO_Bath as MP2_Bath_RHF
 from vayesta.core.bath.bno import UMP2_BNO_Bath as MP2_Bath_UHF
 
+from vayesta.core.bath.coupled_bno import MP2_Coupled_BNO_Bath
+
 from vayesta.core.bath.rpa import RPA_BNO_Bath
 
 from vayesta.core.bath.r2bath import R2_Bath_RHF
@@ -34,6 +36,13 @@ def MP2_Bath(fragment, *args, **kwargs):
         return MP2_Bath_RHF(fragment, *args, **kwargs)
     if fragment.base.is_uhf:
         return MP2_Bath_UHF(fragment, *args, **kwargs)
+
+
+def MP2_Coupled_Bath(fragment, *args, **kwargs):
+    if fragment.base.is_rhf:
+        return MP2_Coupled_BNO_Bath(fragment, *args, **kwargs)
+    if fragment.base.is_uhf:
+        raise NotImplementedError("Coupled MP2 BNOs are implemented for RHF only")
 
 
 def RPA_Bath(fragment, *args, **kwargs):

@@ -97,6 +97,8 @@ class Options(OptionsBase):
         project_dmet_order=2,
         project_dmet_mode="squared-entropy",
         addbuffer=False,
+        # Coupled MP2 bath (bathtype="mp2coupled"): (c_os, c_ss) weights of the BNO density, or "mp2" / "scs"
+        coupled_weights=(1.0, 1.0),
         # Local-aux DF integrals and ligand orbitals (bath/bno)
         local_aux_enable=False,
         local_aux_radius=5.0,
