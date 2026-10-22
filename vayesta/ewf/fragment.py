@@ -598,8 +598,10 @@ class Fragment(BaseFragment):
         mf.kernel()
         dm0 = mf.make_rdm1()
         # Embedded calculation with same options
-        ecc = ewf.EWF(mf, solver=self.solver, bno_threshold=self.bno_threshold, options=self.base.opts)
-        ecc.make_atom_cluster(self.atoms, options=self.opts)
+        ecc = ewf.EWF(mf, solver=self.solver, **self.base.opts.asdict())
+        # `mol` has the real atom at index 0 (see make_cp_mol); `self.atoms` indexes the original cell.
+        with ecc.iao_fragmentation() as f:
+            f.add_atomic_fragment(0)
         ecc.kernel()
 
         return mol.natm, mf.e_tot, ecc.e_tot, dm0
