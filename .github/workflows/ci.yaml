@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, dev]
+    branches: [master, features/production, dev]
   pull_request:
   schedule:
     - cron: '0 2 * * *'
